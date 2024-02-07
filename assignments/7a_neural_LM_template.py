@@ -8,14 +8,12 @@ Bengio's original paper: http://www.jmlr.org/papers/volume3/bengio03a/bengio03a.
 from collections import Counter
 import multiprocessing
 from pprint import pprint
-import time
 
 import nltk
 from nltk.corpus import brown
 import numpy as np
 import torch
 from torch import nn
-import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
@@ -33,7 +31,7 @@ EPOCHS = 5
 torch.manual_seed(42)
 
 
-### Build vocabulary ###
+# ### Build vocabulary ###
 
 # training set: first 12000 paragraphs (dev set: remaining 3000+)
 TRAIN_PARAGRAPHS = 12000
@@ -91,7 +89,7 @@ def get_train_dev(corpus, ngram_size=3):
     return np.array(x_train), np.array(y_train), np.array(x_dev), np.array(y_dev)
 
 
-### Create DataLoaders ###
+# ### Create DataLoaders ###
 
 # check if gpu is available
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -118,7 +116,7 @@ class NPLM(nn.Module):
         # TODO build neural network
 
     def forward(self, inputs):
-        # TODO compute feedforward step and return log probabilities
+        pass  # TODO compute feedforward step and return log probabilities
 
 
 # ------------------------- TRAIN & SAVE MODEL ------------------------
@@ -137,6 +135,7 @@ optimizer = optim.Adam(model.parameters(), lr=2e-3)
 
 
 for epoch in range(EPOCHS):
+    pass
     # TODO Write the training loop
     # TODO At the end of each 500 mini-batches...
     #          * ...print the batch number and loss
