@@ -1,3 +1,5 @@
+#! pip install -U portalocker>=2.0.0 torch torchtext
+
 import time
 
 import torch
@@ -24,19 +26,21 @@ vocab.set_default_index(vocab["<unk>"])
 text_pipeline = lambda x: vocab(tokenizer(x))
 label_pipeline = lambda x: int(x) - 1
 
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def collate_batch(batch):
-    label_list, text_list, offsets = [], [], []
+    label_list, text_list, offsets = [], [], [0]
     for _label, _text in batch:
         label_list.append(label_pipeline(_label))
         processed_text = torch.tensor(text_pipeline(_text), dtype=torch.int64)
         text_list.append(processed_text)
         offsets.append(processed_text.size(0))
     label_list = torch.tensor(label_list, dtype=torch.int64)
-    text_list = nn.utils.rnn.pad_sequence(text_list, batch_first=True)
-    return label_list.to(device), text_list.to(device), offsets
+    offsets = torch.tensor(offsets[:-1]).cumsum(dim=0)
+    text_list = torch.cat(text_list)
+    return label_list.to(device), text_list.to(device), offsets.to(device)
 
 
 train_iter = AG_NEWS(split="train")
@@ -44,16 +48,12 @@ dataloader = DataLoader(
     train_iter, batch_size=8, shuffle=False, collate_fn=collate_batch
 )
 
+
 class TextClassificationModel(nn.Module):
-    def __init__(self, vocab_size, embed_dim, hidden_size, num_class, bidirectional):
+    def __init__(self, vocab_size, embed_dim, num_class):
         super(TextClassificationModel, self).__init__()
-        self.bidirectional = bidirectional
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
-        self.lstm = nn.LSTM(embed_dim, hidden_size, num_layers=1, batch_first=True, bidirectional=bidirectional)
-        if bidirectional:
-            self.fc = nn.Linear(hidden_size * 2, num_class)
-        else:
-            self.fc = nn.Linear(hidden_size, num_class)
+        self.embedding = nn.EmbeddingBag(vocab_size, embed_dim, sparse=False)
+        self.fc = nn.Linear(embed_dim, num_class)
         self.init_weights()
 
     def init_weights(self):
@@ -63,27 +63,18 @@ class TextClassificationModel(nn.Module):
         self.fc.bias.data.zero_()
 
     def forward(self, text, offsets):
-        embedded = self.embedding(text)
-        packed_embedded = nn.utils.rnn.pack_padded_sequence(embedded, offsets, batch_first=True, enforce_sorted=False)
-        packed_output, (hidden, cell) = self.lstm(packed_embedded)
-        output, _ = nn.utils.rnn.pad_packed_sequence(packed_output, batch_first=True)
-        if self.bidirectional:
-            # Concatenate the hidden states from both directions
-            hidden = torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
-        else:
-            hidden = hidden[-1, :, :]
-        return self.fc(hidden)
+        embedded = self.embedding(text, offsets)
+        return self.fc(embedded)
 
 
 train_iter = AG_NEWS(split="train")
 num_class = len(set([label for (label, text) in train_iter]))
 vocab_size = len(vocab)
 emsize = 64
-hidden_size = 64
-bidirectional = False
-model = TextClassificationModel(vocab_size, emsize, hidden_size, num_class, bidirectional).to(device)
+model = TextClassificationModel(vocab_size, emsize, num_class).to(device)
 
-def train(dataloader, model, optimizer, criterion):
+
+def train(dataloader):
     model.train()
     total_acc, total_count = 0, 0
     log_interval = 500
@@ -109,7 +100,8 @@ def train(dataloader, model, optimizer, criterion):
             total_acc, total_count = 0, 0
             start_time = time.time()
 
-def evaluate(dataloader, model):
+
+def evaluate(dataloader):
     model.eval()
     total_acc, total_count = 0, 0
 
@@ -121,6 +113,7 @@ def evaluate(dataloader, model):
             total_count += label.size(0)
     return total_acc / total_count
 
+
 # Hyperparameters
 EPOCHS = 10  # epoch
 LR = 5  # learning rate
@@ -130,7 +123,6 @@ criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.SGD(model.parameters(), lr=LR)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.1)
 total_accu = None
-
 train_iter, test_iter = AG_NEWS()
 train_dataset = to_map_style_dataset(train_iter)
 test_dataset = to_map_style_dataset(test_iter)
@@ -151,8 +143,8 @@ test_dataloader = DataLoader(
 
 for epoch in range(1, EPOCHS + 1):
     epoch_start_time = time.time()
-    train(train_dataloader, model, optimizer, criterion)
-    accu_val = evaluate(valid_dataloader, model)
+    train(train_dataloader)
+    accu_val = evaluate(valid_dataloader)
     if total_accu is not None and total_accu > accu_val:
         scheduler.step()
     else:
@@ -166,17 +158,19 @@ for epoch in range(1, EPOCHS + 1):
     )
     print("-" * 59)
 
-print("Checking the results of the test dataset.")
-accu_test = evaluate(test_dataloader, model)
+print("Checking the results of test dataset.")
+accu_test = evaluate(test_dataloader)
 print("test accuracy {:8.3f}".format(accu_test))
 
 ag_news_label = {1: "World", 2: "Sports", 3: "Business", 4: "Sci/Tec"}
 
+
 def predict(text, text_pipeline):
     with torch.no_grad():
         text = torch.tensor(text_pipeline(text))
-        output = model(text, torch.tensor([text.size(0)]))
+        output = model(text, torch.tensor([0]))
         return output.argmax(1).item() + 1
+
 
 ex_text_str = "MEMPHIS, Tenn. – Four days ago, Jon Rahm was \
     enduring the season’s worst weather conditions on Sunday at The \
